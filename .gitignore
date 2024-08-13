@@ -1,1 +1,4 @@
 pytorch/data/MNIST/*
+pytorch/data/cifar*
+*.DS_Store
+
