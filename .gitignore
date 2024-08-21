@@ -1,4 +1,4 @@
-pytorch/data/MNIST/*
-pytorch/data/cifar*
+pytorch/data/*
+pytorch/runs/*
 *.DS_Store
-
+*.pyc

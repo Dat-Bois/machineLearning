@@ -1,3 +1,11 @@
+
+
+# pip3 install tensorboard
+# pip3 install -U torch-tb-profiler
+# tensorboard --logdir=runs
+
+#------TAKEN FROM 13_feed_forward.py
+
 # MNIST
 # DataLoader, Transformation
 # Multilayer Neural Net, activation function
@@ -14,6 +22,13 @@ import torchvision
 import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 
+
+import torch.nn.functional as F
+from datetime import datetime
+from torch.utils.tensorboard import SummaryWriter
+logdir = "runs/mnist/" + datetime.now().strftime("%Y%m%d-%H%M%S")
+writer = SummaryWriter(logdir)
+
 # device config
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -21,20 +36,16 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 input_size = 784 # 28*28 dimension of imgs which gets flattened
 hidden_size = 100 # arbitrary
 num_classes = 10
-epochs = 10
+epochs = 5
 batch_size = 32
 learning_rate = 0.001
 
-# Global mean and std deviation of the MNIST dataset
-transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
-
-
 # MNIST data set
 train_dataset = torchvision.datasets.MNIST(root='./data', train=True,
-    transform=transform, download=True)
+    transform=transforms.ToTensor(), download=True)
 
 test_dataset = torchvision.datasets.MNIST(root='./data', train=False,
-    transform=transform)
+    transform=transforms.ToTensor())
 
 train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=batch_size, 
     shuffle=True)
@@ -43,15 +54,18 @@ test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=batch
     shuffle=True)
 
 #-----UNCOMMENT TO VISUALIZE
-# examples = iter(train_loader)
-# samples, labels = examples._next_data()
-# # torch.Size([100, 1, 28, 28]) torch.Size([100]) (batch size, color channels, img width, img height) (100 labels (1 for each img in batch))
+examples = iter(train_loader)
+samples, labels = examples._next_data()
+# torch.Size([100, 1, 28, 28]) torch.Size([100]) (batch size, color channels, img width, img height) (100 labels (1 for each img in batch))
 # print(samples.shape, labels.shape)
 
 # for i in range(6):
 #     plt.subplot(2, 3, i+1)
 #     plt.imshow(samples[i][0], cmap='gray')
 # plt.show()
+img_grid = torchvision.utils.make_grid(samples)
+writer.add_image('mnist_images', img_grid)
+writer.flush()
 # ----------------------
 
 class NeuralNet(nn.Module):
@@ -74,8 +88,13 @@ model = model.to(device)
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
+writer.add_graph(model, samples.reshape(-1, 28*28))
+writer.flush()
+
 # training loop
 n_total_steps = len(train_loader)
+running_loss = 0.0
+running_correct = 0
 for epoch in range(epochs):
     for i, (imgs, labels) in enumerate(train_loader):
         # reshape images first since its currently 100, 1, 28, 28
@@ -92,11 +111,25 @@ for epoch in range(epochs):
         loss.backward()
         optimizer.step()
 
-        if (i+1) % 200 == 0 or i+1 == n_total_steps:
+        running_loss+=loss.item()
+        _, pred = torch.max(outputs, 1)
+        running_correct+= (pred == labels).sum().item()
+
+        if (i+1) % 10 == 0 or i+1 == n_total_steps:
             print(f'epoch: {epoch+1} / {epochs}, step {i+1}/{n_total_steps}, loss = {loss.item():.4f}', end='\r')
+            accuracy = running_correct / (100 * imgs.size(0))
+            writer.add_scalar('training loss', running_loss / 100, epoch * n_total_steps + i)
+            writer.add_scalar('accuracy', accuracy, epoch *  n_total_steps + i)
+            running_loss = 0.0
+            running_correct = 0
+
 print()
 # test
 model = model.eval()
+
+labels_list = []
+preds_list = []
+
 with torch.no_grad():
     n_correct = 0
     n_samples = 0
@@ -112,46 +145,20 @@ with torch.no_grad():
         n_samples += labels.shape[0] # number of samples in current batch
         n_correct += (pred == labels).sum().item()
 
+        class_predictions = [F.softmax(output, dim=0) for output in outputs]
+
+        preds_list.append(class_predictions)
+        labels_list.append(pred)
+
+    preds_list = torch.cat([torch.stack(batch) for batch in preds_list])
+    labels_list = torch.cat(labels_list)
+
     acc = 100.0 * n_correct / n_samples
     print(f'Accuracy = {acc}')
 
-
-save_model = input("Save model? (y/n)")
-
-if save_model == 'y':
-    # Save the model
-    FILE = "./data/mnist_ffnn.pth"
-    torch.save(model.state_dict(), FILE)
-    print(f"Model saved as {FILE}")
-
-vis = input("Visualize? (y/n)")
-
-if vis != 'y':
-    exit()
-
-# Visualize results
-with torch.no_grad():
-    # Get a batch of test images
-    dataiter = iter(test_loader)
-    images, labels = dataiter._next_data()
-    images = images.reshape(-1, 28*28).to(device)
-    labels = labels.to(device)
-
-    # Get predictions
-    outputs = model(images)
-    _, preds = torch.max(outputs, 1)
-
-    # Move back to CPU for visualization
-    images = images.cpu()
-    labels = labels.cpu()
-    preds = preds.cpu()
-
-    # Plot the images with their true and predicted labels
-    fig = plt.figure(figsize=(10, 8))
-    for i in range(6):  # Display first 6 images
-        plt.subplot(2, 3, i+1)
-        plt.imshow(images[i].reshape(28, 28), cmap='gray')
-        plt.title(f"Expected: {labels[i].item()} | Pred: {preds[i].item()}")
-        plt.axis('off')
-
-    plt.show()    
+    classes = range(10)
+    for i in classes:
+        labels_i = labels_list==i
+        preds_i = preds_list[:, i]
+        writer.add_pr_curve(str(i), labels_i, preds_i, global_step=0)
+        writer.close()
