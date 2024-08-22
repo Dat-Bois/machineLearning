@@ -1,4 +1,5 @@
 pytorch/data/*
 pytorch/runs/*
+pytorch/rnn-name-class/runs/*
 *.DS_Store
 *.pyc
